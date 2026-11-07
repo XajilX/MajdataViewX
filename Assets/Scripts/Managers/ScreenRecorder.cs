@@ -15,20 +15,20 @@ namespace MajdataViewX.Managers
     {
         private const string EncoderDllName = "RenderingOut";
 
-        [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_create")]
         private static extern IntPtr video_encoder_create(
             int quality,
             int width,
             int height,
             int fps,
-            [MarshalAs(UnmanagedType.LPStr)] string filename);
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string filename);
 
-        [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_submit_frame")]
         private static extern int video_encoder_submit_frame(
             IntPtr encoder,
             IntPtr nativeTexture);
 
-        [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_mux_audio")]
         private static extern int video_encoder_mux_audio(
             IntPtr encoder,
             IntPtr pcmData,
@@ -36,8 +36,23 @@ namespace MajdataViewX.Managers
             int sampleRate,
             int channels);
 
-        [DllImport(EncoderDllName, CallingConvention = CallingConvention.StdCall)]
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_free")]
         private static extern void video_encoder_free(IntPtr encoder);
+
+#if UNITY_STANDALONE_LINUX && !UNITY_EDITOR
+        private const int EncodeFrameEventId = 1;
+
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_queue_frame")]
+        private static extern int video_encoder_queue_frame(
+            IntPtr encoder,
+            IntPtr nativeTexture);
+
+        [DllImport(EncoderDllName, EntryPoint = "video_encoder_wait_frame")]
+        private static extern int video_encoder_wait_frame(IntPtr encoder);
+
+        [DllImport(EncoderDllName, EntryPoint = "GetRenderEventFunc")]
+        private static extern IntPtr GetRenderEventFunc();
+#endif
 
 
         public bool IsRecording { get; private set; }
@@ -137,7 +152,7 @@ namespace MajdataViewX.Managers
                         throw new InvalidOperationException(
                             "The screen recorder render target has no native texture.");
 
-                    var submitResult = video_encoder_submit_frame(encoder, nativeTexture);
+                    var submitResult = SubmitFrame(encoder, nativeTexture);
                     if (submitResult < 0)
                         throw new InvalidOperationException(
                             $"RenderingOut failed to encode a video frame ({submitResult}).");
@@ -208,7 +223,19 @@ namespace MajdataViewX.Managers
             video_encoder_free(encoderToFree);
         }
 
+        private static int SubmitFrame(IntPtr encoder, IntPtr nativeTexture)
+        {
+#if UNITY_STANDALONE_LINUX && !UNITY_EDITOR
+            var queueResult = video_encoder_queue_frame(encoder, nativeTexture);
+            if (queueResult < 0)
+                return queueResult;
 
+            GL.IssuePluginEvent(GetRenderEventFunc(), EncodeFrameEventId);
+            return video_encoder_wait_frame(encoder);
+#else
+            return video_encoder_submit_frame(encoder, nativeTexture);
+#endif
+        }
 
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
         [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
